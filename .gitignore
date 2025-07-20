@@ -39,3 +39,6 @@
 
 # debug information files
 *.dwo
+
+# 忽略 .idea 目录及其所有内容
+.idea/
