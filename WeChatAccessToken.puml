@@ -1,0 +1,29 @@
+@startuml
+'https://plantuml.com/activity-diagram-beta
+
+start
+:获取微信公众号AccessToken;
+while (数据库连接) is (连接失败)
+  :重连;
+endwhile (连接成功)
+if (本地存在configs且configs存在有效AccessToken) then (yes)
+  :更新内存数据;
+  :更新数据库;
+else (no)
+  :从数据库读取最新的AccessToken;
+  if (数据库存在有效AccessToken) then (yes)
+    :更新内存数据;
+    :更新configs数据;
+  else (no)
+    :使用GET接口申请AccessToken;
+    while (获取AccessToken) is (获取失败)
+      :重试;
+    endwhile (获取成功)
+    :更新内存数据;
+    :更新configs数据;
+    :更新数据库;
+  endif
+endif
+:根据当前AccessToken生成时间，生成下一次定时任务：使用GET接口申请AccessToken;
+stop
+@enduml
