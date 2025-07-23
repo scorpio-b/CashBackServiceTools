@@ -1,0 +1,11 @@
+{
+  "appid": "YOUR_APPID",
+  "secret": "YOUR_SECRET",
+  "db_host": "localhost",
+  "db_user": "wechat",
+  "db_pass": "password",
+  "db_name": "wechat_db",
+  "db_port": 3306,
+  "log_file": "token_service.log",
+  "log_level": "info"
+}

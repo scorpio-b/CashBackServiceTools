@@ -2,137 +2,112 @@
 // Created by scorpio-b on 7/20/25.
 //
 
+#include "utils/ConfigManager.h"
+#include "utils/DatabaseManager.h"
+#include "wechat/TokenManager.h"
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <iostream>
-#include <string>
-#include <mutex>
-#include <shared_mutex>
-#include <chrono>
-#include <atomic>
+#include <memory>
 #include <thread>
-#include <curl/curl.h>
-#include <nlohmann/json.hpp>
-#include <mariadb/conncpp.hpp>
+#include <functional>
 
-using json = nlohmann::json;
+int main() {
+    try {
+        // 加载配置
+        AppConfig config = ConfigManager::load("configs/wechat_configs.json");
 
-class WeChatAccessToken {
-public:
-    // 构造函数
-    WeChatAccessToken(const std::string& appId, const std::string& appSecret)
-        : m_appId(appId), m_appSecret(appSecret) {
-        curl_global_init(CURL_GLOBAL_DEFAULT);
-    }
+        // 初始化日志系统
+        std::vector<spdlog::sink_ptr> sinks;
+        sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+        sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+            config.logFile, 1024 * 1024 * 5, 3));
 
-    // 析构函数
-    ~WeChatAccessToken() {
-        m_running = false;
-        if (m_refreshThread.joinable()) {
-            m_refreshThread.join();
-        }
-        curl_global_cleanup();
-    }
+        auto logger = std::make_shared<spdlog::logger>("main", begin(sinks), end(sinks));
+        spdlog::set_default_logger(logger);
 
-    // 初始化并启动刷新线程
-    void start() {
-        fetchToken();
-        m_running = true;
-        m_refreshThread = std::thread(&WeChatAccessToken::refreshLoop, this);
-    }
+        // 设置日志级别
+        if (config.logLevel == "trace") spdlog::set_level(spdlog::level::trace);
+        else if (config.logLevel == "debug") spdlog::set_level(spdlog::level::debug);
+        else if (config.logLevel == "warn") spdlog::set_level(spdlog::level::warn);
+        else if (config.logLevel == "error") spdlog::set_level(spdlog::level::err);
+        else if (config.logLevel == "critical") spdlog::set_level(spdlog::level::critical);
+        else spdlog::set_level(spdlog::level::info);
 
-    // 获取当前有效的token
-    std::string getToken() const {
-        std::shared_lock lock(m_tokenMutex);
-        return m_accessToken;
-    }
+        // 设置日志格式
+        spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [thread %t] %v");
 
-    // 获取过期时间（毫秒时间戳）
-    long long getExpiresAt() const {
-        return m_expiresAt.load();
-    }
+        spdlog::info("启动微信Token服务");
+        spdlog::debug("日志级别: {}", config.logLevel);
 
-private:
-    // HTTP响应回调
-    static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* data) {
-        size_t totalSize = size * nmemb;
-        data->append(static_cast<char*>(contents), totalSize);
-        return totalSize;
-    }
+        // 初始化数据库连接
+        auto db = std::make_shared<DatabaseManager>(
+            config.dbHost, config.dbUser, config.dbPass,
+            config.dbName, config.dbPort
+        );
 
-    // 获取新token
-    void fetchToken() {
-        CURL* curl = curl_easy_init();
-        if (!curl) {
-            throw std::runtime_error("Failed to initialize CURL");
+        // 确保数据库连接
+        while (!db->isConnected()) {
+            spdlog::warn("数据库连接失败，5秒后重试...");
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            db->reconnect();
         }
 
-        const std::string url = "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=" +
-                               m_appId + "&secret=" + m_appSecret;
+        // 初始化Token管理器
+        TokenManager tokenManager(config.appId, config.appSecret, db);
 
-        std::string response;
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+        // 设置Token更新回调
+        tokenManager.setTokenUpdateCallback([&](const std::string& token, long expiry) {
+            spdlog::info("Token已更新: {}****", token.substr(0, 6));
+        });
 
-        CURLcode res = curl_easy_perform(curl);
-        curl_easy_cleanup(curl);
+        spdlog::info("进入主循环");
 
-        if (res != CURLE_OK) {
-            throw std::runtime_error("CURL request failed: " + std::string(curl_easy_strerror(res)));
-        }
+        // 主循环
+        while (true) {
+            // 从数据库获取最新Token
+            auto [dbToken, dbExpiry] = db->getLatestToken();
 
-        json result = json::parse(response);
-        if (result.contains("errcode")) {
-            int errorCode = result["errcode"];
-            std::string errorMsg = result["errmsg"];
-            throw std::runtime_error("WeChat API error: " + std::to_string(errorCode) + " - " + errorMsg);
-        }
+            if (!dbToken.empty() && dbExpiry > tokenManager.getCurrentTimestamp()) {
+                tokenManager.setCurrentToken(dbToken, dbExpiry);
+                spdlog::info("从数据库加载有效Token");
+            } else {
+                // 重试机制
+                int retries = 3;
+                bool success = false;
 
-        std::unique_lock lock(m_tokenMutex);
-        m_accessToken = result["access_token"];
+                while (retries-- > 0) {
+                    if (tokenManager.fetchToken()) {
+                        success = true;
+                        break;
+                    }
+                    spdlog::warn("获取Token失败，2秒后重试...");
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                }
 
-        // 提前5分钟刷新（微信默认7200秒有效期）
-        long expiresIn = result["expires_in"];
-        auto expiresAt = std::chrono::system_clock::now() +
-                         std::chrono::seconds(expiresIn) -
-                         std::chrono::minutes(5);
-
-        m_expiresAt.store(std::chrono::duration_cast<std::chrono::milliseconds>(
-            expiresAt.time_since_epoch()).count());
-    }
-
-    // 刷新循环
-    void refreshLoop() {
-        while (m_running) {
-            auto now = std::chrono::system_clock::now();
-            auto expiresAt = std::chrono::system_clock::time_point(
-                std::chrono::milliseconds(m_expiresAt.load()));
-
-            // 计算下次刷新时间
-            auto nextRefresh = expiresAt - std::chrono::minutes(5);
-            if (nextRefresh < now) {
-                nextRefresh = now + std::chrono::seconds(30); // 立即重试
+                if (!success) {
+                    spdlog::critical("无法获取有效Token，服务终止");
+                    return 1;
+                }
             }
 
-            // 等待到刷新时间
-            std::this_thread::sleep_until(nextRefresh);
-
-            try {
-                fetchToken();
-                std::cout << "Successfully refreshed access token" << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "Token refresh failed: " << e.what() << std::endl;
+            // 计算下一次执行延迟
+            long delay = tokenManager.getNextFetchDelay();
+            if (delay <= 0) {
+                spdlog::warn("无效的延迟时间: {}ms，使用默认60秒", delay);
+                delay = 60000;
             }
+
+            spdlog::info("下次Token获取将在 {} 秒后", delay/1000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         }
+    } catch (const std::exception& e) {
+        spdlog::critical("致命错误: {}", e.what());
+        return 1;
     }
 
-    const std::string m_appId;
-    const std::string m_appSecret;
-
-    mutable std::shared_mutex m_tokenMutex;
-    std::string m_accessToken;
-    std::atomic<long long> m_expiresAt{0}; // 毫秒时间戳
-
-    std::atomic<bool> m_running{false};
-    std::thread m_refreshThread;
-};
+    spdlog::info("服务正常退出");
+    spdlog::shutdown();
+    return 0;
+}
