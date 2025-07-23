@@ -11,6 +11,7 @@
 #include <thread>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+#include <mariadb/conncpp.hpp>
 
 using json = nlohmann::json;
 
