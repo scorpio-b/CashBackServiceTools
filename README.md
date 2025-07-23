@@ -8,4 +8,5 @@ sudo apt install nlohmann-json3-dev
 ```
 
 ## 安装C++连接MariaDB的工具
-`sudo apt-get install libmariadb-dev libmariadb++-dev`
+- 直接安装：`sudo apt-get install libmariadb-dev libmariadb++-dev`
+- 源码：`https://github.com/mariadb-corporation/mariadb-connector-cpp`

@@ -5,13 +5,17 @@
 #ifndef DATABASE_MANAGER_H
 #define DATABASE_MANAGER_H
 
-#include <mariadb/mysql.h>
+#include <mariadb/conncpp.hpp>
 #include <string>
-#include <utility>
 #include <memory>
+#include <spdlog/spdlog.h>
 
 class DatabaseManager {
 public:
+    using ResultSetPtr = std::unique_ptr<sql::ResultSet>;
+    using StatementPtr = std::unique_ptr<sql::Statement>;
+    using PreparedStatementPtr = std::unique_ptr<sql::PreparedStatement>;
+
     explicit DatabaseManager(const std::string& host,
                             const std::string& user,
                             const std::string& password,
@@ -29,12 +33,14 @@ public:
     DatabaseManager& operator=(const DatabaseManager&) = delete;
 
 private:
-    MYSQL* m_conn;
-    std::string m_host;
-    std::string m_user;
-    std::string m_password;
-    std::string m_database;
-    int m_port;
+    void initializeConnection();
+
+    std::unique_ptr<sql::Connection> conn_;
+    std::string host_;
+    std::string user_;
+    std::string password_;
+    std::string database_;
+    int port_;
 };
 
 #endif // DATABASE_MANAGER_H
