@@ -28,12 +28,30 @@ int main() {
         spdlog::set_default_logger(logger);
 
         // 设置日志级别
-        if (config.logLevel == "trace") spdlog::set_level(spdlog::level::trace);
-        else if (config.logLevel == "debug") spdlog::set_level(spdlog::level::debug);
-        else if (config.logLevel == "warn") spdlog::set_level(spdlog::level::warn);
-        else if (config.logLevel == "error") spdlog::set_level(spdlog::level::err);
-        else if (config.logLevel == "critical") spdlog::set_level(spdlog::level::critical);
-        else spdlog::set_level(spdlog::level::info);
+        if (config.logLevel == "trace")
+        {
+            spdlog::set_level(spdlog::level::trace);
+        }
+        else if (config.logLevel == "debug")
+        {
+            spdlog::set_level(spdlog::level::debug);
+        }
+        else if (config.logLevel == "warn")
+        {
+            spdlog::set_level(spdlog::level::warn);
+        }
+        else if (config.logLevel == "error")
+        {
+            spdlog::set_level(spdlog::level::err);
+        }
+        else if (config.logLevel == "critical")
+        {
+            spdlog::set_level(spdlog::level::critical);
+        }
+        else
+        {
+            spdlog::set_level(spdlog::level::info);
+        }
 
         // 设置日志格式
         spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [thread %t] %v");
